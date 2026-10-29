@@ -77,6 +77,8 @@ def int8_to_fp8(onnx_model: onnx.ModelProto) -> onnx.ModelProto:
         np_scale = onnx.numpy_helper.to_array(scale)
         np_fp8_scale = np_scale.astype(np.float32) * (127.0 / 448.0)
         dtype = onnx.helper.tensor_dtype_to_np_dtype(scale.data_type)
+        if dtype == np.float16:
+            np_fp8_scale = np.maximum(np_fp8_scale, np.finfo(np.float16).smallest_subnormal)
         return numpy_helper.from_array(np_fp8_scale.astype(dtype), scale_name)
 
     def _update_tensor_type(tensor_name):

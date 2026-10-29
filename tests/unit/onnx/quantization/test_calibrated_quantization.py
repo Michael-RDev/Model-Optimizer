@@ -118,6 +118,7 @@ def test_explicit_calibrated_quantization_graph_contract(
     activation_scale,
     weight_scales,
 ):
+    """Calibrated Q/DQ pairs must share correctly typed scales and zero points."""
     input_path = tmp_path / "matmul.onnx"
     output_path = tmp_path / "matmul.quant.onnx"
     onnx.save_model(_make_matmul_model(), input_path)
@@ -181,11 +182,19 @@ def test_explicit_calibrated_quantization_graph_contract(
 
 
 @pytest.mark.parametrize("high_precision_dtype", ["fp16", "fp32"])
-def test_fp8_max_calibration_preserves_finite_large_inputs(tmp_path, high_precision_dtype):
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param([[1, 40000, 2, 40000]], id="large-range"),
+        pytest.param(np.array([[1, 4, 2, 4]]) * 2**-20, id="small-range"),
+    ],
+)
+def test_fp8_max_calibration_preserves_finite_inputs(tmp_path, high_precision_dtype, data):
+    """Large and small calibrated ranges must remain usable in the exported model."""
     model = _make_matmul_model()
     weight = np.array([[0.25, 0, 0], [0, 0.25, 0], [0.25, 0, 0], [0, 0.25, 0.25]], np.float32)
     model.graph.initializer[0].CopyFrom(numpy_helper.from_array(weight, "weight"))
-    data = np.array([[1, 40000, 2, 40000]], dtype=np.float32)
+    data = np.asarray(data, dtype=np.float32)
     input_path = tmp_path / "matmul.onnx"
     output_path = tmp_path / "matmul.quant.onnx"
     onnx.save_model(model, input_path)
@@ -210,7 +219,10 @@ def test_fp8_max_calibration_preserves_finite_large_inputs(tmp_path, high_precis
         for node in quantized.graph.node
         if node.op_type == "QuantizeLinear" and node.input[0] not in initializers
     )
-    np.testing.assert_allclose(initializers[activation_q.input[1]], data.max() / 448, rtol=5e-4)
+    expected_scale = data.max() / 448
+    if high_precision_dtype == "fp16":
+        expected_scale = max(expected_scale, np.finfo(np.float16).smallest_subnormal)
+    np.testing.assert_allclose(initializers[activation_q.input[1]], expected_scale, rtol=5e-4)
     options = ort.SessionOptions()
     options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     options.intra_op_num_threads = 1
